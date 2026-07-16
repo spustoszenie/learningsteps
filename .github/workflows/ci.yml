@@ -25,6 +25,9 @@ jobs:
       - name: Lint with ruff
         run: ruff check .
         continue-on-error: true
+      
+      - name: Install pytest
+        run: pip install pytest
 
       - name: Run pytest
         run: pytest
