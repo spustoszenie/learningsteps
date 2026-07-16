@@ -1,6 +1,6 @@
-FROM python:3.13-slim
+FROM python:3.6-slim
 
-WORKDIR /app
+WORKDIR /FastAPI
 
 COPY api/requirements.txt .
 
