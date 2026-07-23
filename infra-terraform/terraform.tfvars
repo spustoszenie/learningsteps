@@ -1,5 +1,0 @@
-subscription_id = "38697092-adc9-49fa-b2ed-d20d7b52c26f"
-location        = "westeurope"
-kv_name = "learnsteps-kv-388521"
-db_password = "SomeStr0ng!Pass"
-acr_name = "evolution012983"
