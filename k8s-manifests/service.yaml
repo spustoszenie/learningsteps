@@ -1,0 +1,11 @@
+# k8s-manifests/service.yaml — public IP via a load balancer
+apiVersion: v1
+kind: Service
+metadata:
+  name: learningsteps
+spec:
+  type: LoadBalancer
+  selector:
+    app: learningsteps        # finds pods by LABEL, not by name
+  ports:
+    - { port: 80, targetPort: 8000 }

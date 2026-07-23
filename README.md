@@ -1,205 +1,274 @@
-# LearningSteps API
+# LearningSteps — Evolution
 
-Welcome to LearningSteps! LearningSteps is a Python FastAPI + PostgreSQL application that helps people track their daily learning journey. In this project, you will build, extend, and finally deploy LearningSteps to the cloud!
+A FastAPI application deployed to Azure Kubernetes Service, with infrastructure defined as code and a security-gated CI/CD pipeline.
 
+This README is the onboarding guide: follow it to reproduce the whole deployment on **your own** Azure subscription.
 
-## Table of Contents
+---
 
-- [🚀 Getting Started](#-getting-started)
-- [🎯 Development Tasks (Your Work!)](#-development-tasks-your-work)
-  - [1. API Implementation (Required)](#1-api-implementation-required)
-  - [2. Logging Setup (Required)](#2-logging-setup-required)
-  - [3. Data Model Improvements (Optional)](#3-data-model-improvements-optional)
-  - [4. Cloud CLI Setup (Required for Deployment)](#4-cloud-cli-setup-required-for-deployment)
-- [📊 Data Schema](#-data-schema)
-- [�️ Explore Your Database (Optional)](#️-explore-your-database-optional)
-- [🔧 Troubleshooting](#-troubleshooting)
-- [🤝 Contributing](#-contributing)
-- [📄 License](#-license)
+## What this is
 
-## 🚀 Getting Started
+| Layer | What it does | Where |
+|---|---|---|
+| **App** | FastAPI app, packaged as a container image | `Dockerfile`, `api/` |
+| **Infrastructure** | Network, cluster, registry, database, secrets — as Terraform | `infra-terraform/` |
+| **Pipeline** | Build → security scan → push image to the registry | `.github/workflows/` |
+| **Orchestration** | Runs the app on Kubernetes, exposes it publicly | `k8s-manifests/` |
 
-### Prerequisites
+**Flow:** `git push` → GitHub Actions builds the image → Trivy scans it (build fails on CRITICAL) → image is pushed to Azure Container Registry → Kubernetes pulls it and runs it, reading its database password from Key Vault.
 
-- Git installed on your machine
-- Docker Desktop installed and running
-- VS Code with the Dev Containers extension
+```
+                    ┌──────────────── Resource Group ────────────────┐
+                    │                                                │
+   git push ──► CI/CD ──► ACR ──────┐                                │
+                    │               ▼                                │
+                    │   ┌── VNet ───────────────────────────────┐    │
+                    │   │  aks-subnet ──► AKS ──► pods ──► LB ──┼────┼──► public IP
+                    │   │                         │            │    │
+                    │   │  db-subnet  ──► PostgreSQL (private)  │    │
+                    │   └───────────────────────────────────────┘    │
+                    │                         ▲                      │
+                    │        Key Vault ───────┘ (connection string)  │
+                    └────────────────────────────────────────────────┘
+```
 
-### 1. Fork and Clone the Repository
+---
 
-1. **Fork this repository** to your GitHub account by clicking the "Fork" button
-1. **Clone your fork** to your local machine:
+## Prerequisites
 
-   ```bash
-   git clone https://github.com/YOUR_USERNAME/learningsteps.git
-   ```
+- An **Azure subscription** where you can create resources *and* role assignments (Owner or User Access Administrator — role assignments fail with `403` on Contributor alone)
+- [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli), [Terraform](https://developer.hashicorp.com/terraform/downloads) ≥ 1.9, [kubectl](https://kubernetes.io/docs/tasks/tools/), Git
+- A GitHub account (to fork this repo and run the pipeline)
 
-1. Move into the project directory:
+---
 
-   ```bash
-   cd learningsteps
-   ```
+## Setup
 
-1. **Open in VS Code**:
+### 1. Get the code
 
-   ```bash
-   code .
-   ```
+**Fork** this repo on GitHub, then clone **your fork** — you need push access and your own pipeline:
 
-### 2. Configure Your Environment (.env)
+```bash
+git clone https://github.com/<YOU>/learningsteps.git
+cd learningsteps
+git remote -v      # must show YOUR username
+```
 
-Environment variables live in a `.env` file (which is **git-ignored** so you don't accidentally commit secrets). This repo ships with a template named `.env-sample`.
+Two things do not come with a fork: open the **Actions** tab and enable workflows, and add your own secrets (step 4) — secrets are never copied.
 
-1. Copy the sample file to create your real `.env`:
+<details>
+<summary>Already have your own Terraform and only want the Kubernetes manifests?</summary>
 
-   ```bash
-   cp .env-sample .env
-   ```
+Don't fork — pull the single folder into your existing repo:
 
-### 3. Set Up Your Development Environment
+```bash
+git remote add upstream https://github.com/spustoszenie/learningsteps.git
+git fetch upstream
+git checkout upstream/main -- k8s-manifests/
+```
 
-1. **Install the Dev Containers extension** in VS Code (if not already installed)
-2. **Reopen in container**: When VS Code detects the `.devcontainer` folder, click "Reopen in Container"
-   - Or use Command Palette (`Cmd/Ctrl + Shift + P`): `Dev Containers: Reopen in Container`
-3. **Wait for setup**: The API container will automatically install Python, dependencies, and configure your environment.
-   The PostgreSQL Database container will also automatically be created.
+Avoid `git pull` here — if the repos grew separately, Git refuses ("unrelated histories"), and even when it works it merges everything and collides with your own `variables.tf`.
+</details>
 
-### 4. Verify the PostgreSQL Database Is Running
+### 2. Configure your variables
 
-In a terminal outside of VS Code, run:
+Create `infra-terraform/terraform.tfvars` (git-ignored — never commit it):
 
-   ```bash
-      docker ps
-   ```
+```hcl
+subscription_id = "<your-subscription-id>"
+acr_name        = "acrlearn<yourinitials>"    # globally unique, letters+numbers only, 5-50
+kv_name         = "learn-kv-<yourinitials>"   # globally unique, 3-24 chars, letters/numbers/dashes
+db_password     = "<a strong password>"
+```
 
-You should see the postgres service running.
+Then set your own prefix in `infra-terraform/variables.tf`:
 
-### 5. Run the API
+```hcl
+variable "prefix" {
+  default = "learnsteps<yourinitials>"
+}
+```
 
-Make sure you are in the root of your project in the terminal (inside VS Code, while container is running):
+> **Why the prefix matters:** the database server name is built from it and becomes a public DNS name (`<prefix>-pg.postgres.database.azure.com`). DNS is global, so two people using the same prefix collide with `ServerNameAlreadyExists`.
 
-   ```bash
-     ./start.sh
-   ```
+**Globally unique names in this stack:** the container registry, the Key Vault, and the PostgreSQL server.
 
-### 6. Test Everything Works! 🎉
+### 3. Build the infrastructure
 
-1. **Visit the API docs**: http://localhost:8000/docs
-1. **Create your first entry** In the Docs UI Use the POST `/entries` endpoint to create a new journal entry.
-1. **View your entries** using the GET `/entries` endpoint to see what you've created!
+```bash
+az login
+az account set --subscription <your-subscription-id>
 
-**🎯 Once you can create and see entries, you're ready to start implementing the missing endpoints!**
+cd infra-terraform
+terraform init
+terraform plan          # read it before you apply
+terraform apply         # ~10-15 min (cluster and database are slow)
+```
 
-## Your Learning Goals
+When it finishes:
 
-Complete a learning journal API that allows users to:
+```bash
+terraform output        # acr_server, aks_name, key_vault_uri
+```
 
-- ✅ **Store journal entries** (already implemented)
-- ✅ **Retrieve all journal entries** (already implemented)
-- ❌ **Retrieve single journal entry** (you need to implement)  
-- ❌ **Delete specific journal entries** (you need to implement)
-- ✅ **Update journal entries** (already implemented)
-- ✅ **Delete all entries** (already implemented)
-- ❌ **Setup logging** (you need to implement)
+### 4. Point the pipeline at your registry
 
-## 🎯 Development Tasks (Your Work!)
+Get the registry credentials:
 
-You'll use **feature branches** and **Pull Requests (PRs)** for each task. Complete these tasks in your forked repository using feature branches.
+```bash
+az acr credential show -n <your_acr_name> --query "{u:username, p:passwords[0].value}" -o table
+```
 
-### 1. API Implementation (Required)
+In **your fork** → Settings → Secrets and variables → Actions, add:
 
-#### Task 1a: GET Single Entry Endpoint
+| Secret | Value |
+|---|---|
+| `ACR_SERVER` | from `terraform output acr_server` |
+| `ACR_USERNAME` | `u` from the command above |
+| `ACR_PASSWORD` | `p` from the command above |
 
-- Branch: `feature/get-single-entry`
-- [ ] Implement **GET /entries/{entry_id}** in `api/routers/journal_router.py`
+Then trigger the pipeline so it builds and pushes the image:
 
-#### Task 1b: DELETE Single Entry Endpoint
+```bash
+git commit --allow-empty -m "trigger CD"
+git push
 
-- Branch: `feature/delete-entry`
-- [ ] Implement **DELETE /entries/{entry_id}** in `api/routers/journal_router.py`
+# after ~1 min — newest tag first; the tag is the full commit SHA
+az acr repository show-tags -n <your_acr_name> --repository learningsteps --orderby time_desc -o table
+```
 
-### 2. Logging Setup (Required)
+> Terraform creates the *empty* registry; the pipeline puts images in it. A push before `terraform apply` will fail at the login step — that's expected.
 
-- Branch: `feature/logging-setup`
-- [ ] Configure logging in `api/main.py`
+### 5. Deploy to Kubernetes
 
-### 3. Data Model Improvements (Optional)
+Connect `kubectl` to your cluster (needed again after every rebuild — a new cluster means new credentials):
 
-- Branch: `feature/data-model-improvements`  
-- [ ] Add validators to `api/models/entry.py`
+```bash
+az aks get-credentials --resource-group <your_rg> --name <your_aks>
+kubectl get nodes       # expect 2 nodes, Ready
+```
 
-### 4. Cloud CLI Setup (Required for Deployment)
+Copy the database connection string from Key Vault into a Kubernetes secret — the value never touches a file in the repo:
 
-- Branch: `feature/cloud-cli-setup`
-- [ ] Uncomment one CLI tool in `.devcontainer/devcontainer.json`
+```powershell
+$KV   = "<your_kv_name>"
+$CONN = az keyvault secret show --vault-name $KV --name db-connection-string --query value -o tsv
+kubectl create secret generic learningsteps-secrets --from-literal=DATABASE_URL="$CONN"
+```
 
-## 📊 Data Schema
+Edit `k8s-manifests/deployment.yaml` to point at **your** registry and **your** tag:
 
-Each journal entry follows this structure:
+```yaml
+image: <your_acr_server>/learningsteps:<full-SHA-tag-from-step-4>
+```
 
-| Field       | Type      | Description                                | Validation                   |
-|-------------|-----------|--------------------------------------------|------------------------------|
-| id          | string    | Unique identifier (UUID)                   | Auto-generated               |
-| work        | string    | What did you work on today?                | Required, max 256 characters |
-| struggle    | string    | What's one thing you struggled with today? | Required, max 256 characters |
-| intention   | string    | What will you study/work on tomorrow?      | Required, max 256 characters |
-| created_at  | datetime  | When entry was created                     | Auto-generated UTC           |
-| updated_at  | datetime  | When entry was last updated                | Auto-updated UTC             |
+Apply everything:
 
-## 🗄️ Explore Your Database (Optional)
+```bash
+kubectl apply -f k8s-manifests/
+kubectl get pods -w                           # goal: Running, and it stays Running
+kubectl get service learningsteps --watch     # EXTERNAL-IP: <pending> → public IP
+```
 
-Want to see your data directly in the database? You can connect to PostgreSQL using VS Code's PostgreSQL extension:
+### 6. Verify
 
-### 1. Install PostgreSQL Extension
+Open `http://<EXTERNAL-IP>/docs` — the FastAPI docs page should load.
 
-1. **Install the PostgreSQL extension** in VS Code (search for "PostgreSQL" by Chris Kolkman)
-2. **Restart VS Code** after installation
+```bash
+kubectl get hpa         # TARGETS shows a CPU %, not <unknown>
+```
 
-### 2. Connect to Your Database
+---
 
-1. **Open the PostgreSQL extension** (click the PostgreSQL icon in the sidebar)
-2. **Click "Add Connection"** or the "+" button
-3. **Enter these connection details**:
-   - **Host name**: `postgres`
-   - **User name**: `postgres`
-   - **Password**: `postgres`
-   - **Port**: `5432`
-   - **Conection Type**: `Standard/No SSL`
-   - **Database**: `learning_journal`
-   - **Display name**: `Learning Journal DB` (or any name you prefer)
+## What's in `infra-terraform/`
 
-### 3. Explore Your Data
+Terraform loads every `.tf` file in the folder; the split is for humans.
 
-1. **Expand your connection** in the PostgreSQL panel
-2. **Left-click on "Learning Journal DB" to expand**
-3. **Right-click on "learning_journal"**
-4. **Select "New Query"**
-5. **Type this query** to see all your entries:
+| File | Creates |
+|---|---|
+| `versions.tf` | Provider (`azurerm ~> 4.0`) and version pinning |
+| `variables.tf` | Input declarations |
+| `main.tf` | Resource group |
+| `network.tf` | VNet, `aks-subnet` (`/22`), `db-subnet` (delegated to PostgreSQL) |
+| `acr.tf` | Container registry (`admin_enabled = true`, used by CD) |
+| `aks.tf` | AKS cluster + `AcrPull` role assignment so it can pull images |
+| `postgres.tf` | Private DNS zone + link, PostgreSQL Flexible Server, database |
+| `keyvault.tf` | Key Vault, secrets-officer role, DB connection string secret |
+| `outputs.tf` | `acr_server`, `aks_name`, `key_vault_uri` |
 
-   ```sql
-   SELECT * FROM entries;
-   ```
+**Ordering is automatic.** Resources reference each other (a subnet points at the VNet, the role assignment points at the cluster and registry), and Terraform builds a dependency graph from those references. The two exceptions are `depends_on` in `postgres.tf` (DNS link before the server) and `keyvault.tf` (role before writing the secret) — order matters there but no reference exists.
 
-6. **Run the query** to see all your journal data! (Ctrl/Cmd + Enter OR use the PostgreSQL command pallete: Run Query)
+**Region:** `westeurope`. PostgreSQL Flexible Server is not offered in every region on every subscription — verify before changing it:
 
-You can now explore the database structure, see exactly how your data is stored, and run custom queries to understand PostgreSQL better.
+```bash
+az postgres flexible-server list-skus --location <region> -o table   # empty = not available
+```
 
-## 🔧 Troubleshooting
+---
 
-**If the API won't start:**
+## Troubleshooting
 
-- Make sure the PostgreSQL container is running: `docker ps`
-- Check the container logs: `docker logs your-postgres-container-name`
-- Restart the database: `docker restart your-postgres-container-name`
+### Kubernetes toolbox
 
-**If you can't connect to the database:**
+```bash
+kubectl get pods                     # 1. what's the status?
+kubectl describe pod <pod-name>      # 2. why? — read the Events at the bottom
+kubectl logs <pod-name>              # 3. what did the app say?
+kubectl logs <pod-name> --previous   #    ...if it already restarted
+kubectl get secret learningsteps-secrets -o yaml   # 4. is the secret there?
+kubectl exec -it <pod-name> -- /bin/bash           # 5. go inside and look
+```
 
-- Verify the `.env` file exists and has the correct DATABASE_URL
-- Make sure Docker Desktop is running
-- Try restarting the dev container: `Dev Containers: Rebuild Container`
+`describe` is Kubernetes' view from the outside; `logs` is the app's own voice from the inside.
 
-**If the dev container won't open:**
+> `kubectl get secret -o yaml` shows **base64**, which is encoding, not encryption. Anyone who can read it can decode it — don't paste that output into chat or screenshots.
 
-- Ensure Docker Desktop is running
-- Install the "Dev Containers" extension in VS Code
-- Try: `Dev Containers: Rebuild and Reopen in Container`
+### Common errors
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `ImagePullBackOff` | Wrong image tag, or no pull permission | Use the real SHA from `az acr repository show-tags`; check the `AcrPull` role exists |
+| `CrashLoopBackOff` after reaching Running | Image pulled fine; the app exits — usually the DB connection | `kubectl logs <pod> --previous`; verify `DATABASE_URL` reached the pod |
+| `kubectl` says `localhost:8080 connection refused` | kubeconfig doesn't know the cluster | `az aks get-credentials ...` |
+| `ServerNameAlreadyExists` | Another subscription took the database name | Change `prefix` in `variables.tf` |
+| `InsufficientVCPUQuota` / `VM size not allowed` | Burstable (`B*`) is often zeroed on sandbox subscriptions | Use `Standard_D2s_v3` |
+| PostgreSQL `LocationIsOfferRestricted` | Service not sold in that region/subscription | Check `list-skus`; use `westeurope` |
+| `403` on a role assignment or Key Vault secret | Role propagation takes up to ~10 min | Re-run `terraform apply` |
+| `Provider produced inconsistent result` | Transient Azure 404 — the resource usually exists | Verify with `az ... list`, then `terraform import` — **don't** destroy |
+| CD fails at ACR login | Secrets don't match the current registry | Refresh `ACR_SERVER` / `ACR_USERNAME` / `ACR_PASSWORD` |
+| HPA shows `<unknown>` | Deployment has no `resources.requests` | Add CPU requests |
+
+### Push rejected: file over 100 MB
+
+`terraform init` downloads a ~240 MB provider binary into `.terraform/`. If it was committed before `.gitignore` covered it, GitHub rejects the push — `.gitignore` only stops Git from *starting* to track a file.
+
+```bash
+git fetch origin
+git reset --soft origin/main                    # rewind to remote; your changes stay staged
+git rm -r --cached infra-terraform/.terraform   # stop tracking it (stays on disk)
+git commit -m "providers ignored"
+git status                                      # .terraform/ must not appear
+git push
+```
+
+> If a **secret** was already pushed, removing it does not un-leak it. Rotate the credential and treat the old one as compromised.
+
+---
+
+## Secrets & Git hygiene
+
+- `terraform.tfvars` holds your subscription ID and database password — it is git-ignored. The committed template is `terraform.tfvars.example`.
+- `.terraform/` (provider binaries) is ignored; `.terraform.lock.hcl` **is** committed — it pins the provider version for everyone. Commit the recipe, not the ingredients.
+- `*.tfstate` is ignored — state files can contain secrets in plain text.
+- Key Vault is the source of truth for the database connection string. It is never written into a YAML file.
+
+---
+
+## Tear down
+
+```bash
+cd infra-terraform
+terraform destroy
+```
+
+Everything is code, so bringing it back is `terraform apply` plus a `git push`.

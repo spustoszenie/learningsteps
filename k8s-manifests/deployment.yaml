@@ -1,0 +1,43 @@
+# k8s-manifests/deployment.yaml — run the app image from ACR
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: learningsteps
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: learningsteps
+  template:
+    metadata:
+      labels:
+        app: learningsteps
+    spec:
+# --- INIT CONTAINERS ---
+      initContainers:
+        - name: init-db
+          image: postgres:15-alpine
+          # run the SQL script to create the table and indexes:
+          command: ["sh", "-c", "psql $DATABASE_URL -f /scripts/database_setup.sql"]
+          envFrom:
+            - configMapRef: { name: learningsteps-config }
+            - secretRef: { name: learningsteps-secrets }
+          volumeMounts:
+            - name: db-script-volume
+              mountPath: /scripts
+      containers:
+        - name: learningsteps
+          image: evolution012983.azurecr.io/learningsteps:ac4a849a85e99bb5a792351cd976194514f6e08e   # the real SHA from show-tags
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef: { name: learningsteps-config }
+            - secretRef:    { name: learningsteps-secrets }
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }   # HPA needs requests
+            limits:   { cpu: 500m, memory: 256Mi }
+# --- VOLUMES ---
+      volumes:
+        - name: db-script-volume
+          configMap:
+            name: db-init-script

@@ -1,0 +1,5 @@
+subscription_id = "id"
+location        = "westeurope"
+kv_name = "kv-unique-name"
+db_password = "SomeStr0ng!Pass"
+acr_name = "acr-unique-name"

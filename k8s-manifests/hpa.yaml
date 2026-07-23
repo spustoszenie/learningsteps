@@ -1,0 +1,14 @@
+# k8s-manifests/hpa.yaml — 2 to 5 copies, scale at 70% CPU
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: learningsteps
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: learningsteps }
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 70 }

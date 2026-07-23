@@ -1,0 +1,22 @@
+# k8s-manifests/configmap.yaml — non-secret config (fine to commit)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: learningsteps-config
+data:
+  APP_ENV: "production"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: db-init-script
+data:
+  database_setup.sql: |
+    CREATE TABLE IF NOT EXISTS entries (
+        id VARCHAR PRIMARY KEY,
+        data JSONB NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_entries_created_at ON entries(created_at);
+    CREATE INDEX IF NOT EXISTS idx_entries_data_gin ON entries USING GIN (data);
